@@ -1,0 +1,51 @@
+[colors]
+# Kolor bazowy klawiatury (R, G, B: 0-255)
+base = [0, 40, 80]
+# Drugi kolor tła (gradienty, pulsowanie, fala)
+base_2 = [0, 80, 160]
+# Kolor po naciśnięciu klawisza
+press = [255, 120, 0]
+# Drugi kolor reakcji na naciśnięcie (gradienty, pulsowanie itd.)
+press_2 = [255, 200, 50]
+
+[background]
+# static | breathe | gradient_horizontal | gradient_vertical | gradient_flow
+# gradient_flow_reverse | diagonal | checkerboard | cycle | rainbow | wave
+# wave_vertical | wave_flow
+# pulse_radial | meteor | strobe | blink_alternate | rain | rain_hits | per_key
+mode = "static"
+speed = 0.5
+
+[press]
+# Tryb efektu po naciśnięciu:
+# static | breathe | gradient_* | wave_* | ... | strobe
+# ripple = fala rozchodząca się od naciśniętego klawisza po całej klawiaturze
+mode = "static"
+
+[custom_keys]
+# Tryb domyślny dla klawiszy z własnym kolorem (bez indywidualnego efektu)
+# static | breathe | gradient_horizontal | ... | strobe
+mode = "static"
+
+[timing]
+# Ile sekund klawisz świeci pełnym kolorem po naciśnięciu
+hold_seconds = 2.0
+# Ile sekund trwa wygaszanie z powrotem do koloru bazowego
+fade_seconds = 1.0
+
+[display]
+brightness = 100
+fps = 30
+
+[device]
+# Puste = pierwsza wykryta klawiatura OpenRazer
+keyboard_name = ""
+
+[ui]
+# Interface language: en | pl
+language = "en"
+
+[indicators]
+# Podświetl Caps Lock, gdy blokada wielkich liter jest włączona
+caps_lock = true
+caps_lock_color = [255, 220, 40]

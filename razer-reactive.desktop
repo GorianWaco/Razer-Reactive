@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Razer Reactive
+GenericName=Keyboard lighting
+GenericName[pl]=Podświetlenie klawiatury
+Comment=Reactive per-key lighting for OpenRazer keyboards
+Comment[pl]=Reaktywne podświetlenie klawiszy OpenRazer
+Exec=razer-reactive-gui
+Icon=input-keyboard-symbolic
+Categories=Utility;Settings;HardwareSettings;
+Keywords=razer;rgb;keyboard;openrazer;
+Terminal=false
+StartupNotify=true

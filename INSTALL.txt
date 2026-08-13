@@ -1,0 +1,69 @@
+Razer Reactive — installation (any typical Linux desktop)
+=========================================================
+Version: see the VERSION file
+
+Requirements
+------------
+  • Linux with systemd (Arch, Fedora, Debian/Ubuntu, openSUSE, CachyOS, …)
+  • Razer keyboard with per-key lighting (OpenRazer matrix)
+  • OpenRazer daemon + DKMS driver
+  • Optional: keyd (if you remap M-keys)
+
+Quick install
+-------------
+  git clone https://github.com/GorianWaco/Razer-Reactive.git
+  cd Razer-Reactive
+  sudo ./install.sh
+
+  Then log out and back in (openrazer group), plug in the keyboard,
+  and run: razer-reactive-gui
+
+From a release tarball
+----------------------
+  tar -xzf razer-reactive-*.tar.gz
+  cd razer-reactive-*
+  sudo ./install.sh
+
+If OpenRazer is already installed
+---------------------------------
+  sudo ./install.sh --skip-packages
+
+What install.sh does
+--------------------
+  • Detects pacman / apt / dnf / zypper
+  • Installs GTK4, libadwaita, PyGObject, python-evdev, OpenRazer when packages exist
+  • Copies the app to ~/.local/share/razer-reactive/
+  • Menu shortcut (and Desktop / Pulpit if that folder exists)
+  • User systemd service (lighting autostart)
+  • Factory profiles: Startowy, Mryganie na przemian, Deszcz czerwony, Krople na klawisze
+
+OpenRazer (if the script cannot install it)
+-------------------------------------------
+  Ubuntu / Mint:
+    sudo add-apt-repository ppa:openrazer/stable
+    sudo apt update
+    sudo apt install openrazer-meta
+
+  Fedora:
+    sudo dnf install openrazer-meta
+
+  Arch / CachyOS:
+    sudo pacman -S openrazer-meta
+
+  Docs: https://openrazer.github.io/
+
+Useful commands
+---------------
+  razer-reactive-gui
+  systemctl --user status razer-reactive.service
+  systemctl --user restart razer-reactive.service
+  sudo ./uninstall.sh
+
+Keyd (optional)
+---------------
+  sudo usermod -aG keyd $USER
+  # then log out / log in
+
+Source
+------
+  https://github.com/GorianWaco/Razer-Reactive
