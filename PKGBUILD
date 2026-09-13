@@ -76,6 +76,15 @@ package() {
     install -Dm644 "$root/razer-reactive.desktop" \
         "$pkgdir/usr/share/applications/razer-reactive.desktop"
 
+    if [[ -d "$root/icons/hicolor" ]]; then
+        for size in 32 48 64 128 256 512; do
+            local icon="$root/icons/hicolor/${size}x${size}/apps/razer-reactive.png"
+            [[ -f "$icon" ]] || continue
+            install -Dm644 "$icon" \
+                "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/razer-reactive.png"
+        done
+    fi
+
     install -Dm755 /dev/stdin "$pkgdir/usr/bin/razer-reactive" <<'EOF'
 #!/bin/sh
 exec python3 /usr/share/razer-reactive/razer_reactive.py "$@"

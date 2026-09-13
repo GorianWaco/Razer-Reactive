@@ -258,7 +258,7 @@ Name=Razer Reactive
 GenericName=Keyboard lighting
 Comment=Reactive per-key lighting for OpenRazer keyboards
 Exec=$BIN_DIR/razer-reactive-gui
-Icon=input-keyboard-symbolic
+Icon=razer-reactive
 Categories=Utility;Settings;HardwareSettings;
 Terminal=false
 StartupNotify=true
@@ -274,6 +274,26 @@ EOF
         as_user gio set "$desktop/Razer Reactive.desktop" metadata::trusted true 2>/dev/null || true
     fi
     ok "application menu"
+}
+
+install_icons() {
+    step "App icon"
+    local hi="$USER_HOME/.local/share/icons/hicolor"
+    local src="$DIR/icons/hicolor"
+    local size
+    if [ ! -d "$src" ]; then
+        warn "no icons/hicolor next to installer"
+        return 0
+    fi
+    for size in 32 48 64 128 256 512; do
+        local from="$src/${size}x${size}/apps/razer-reactive.png"
+        [ -f "$from" ] || continue
+        install -d "$hi/${size}x${size}/apps"
+        install -m644 "$from" "$hi/${size}x${size}/apps/razer-reactive.png"
+        chown "$USER_NAME:" "$hi/${size}x${size}/apps/razer-reactive.png"
+    done
+    as_user gtk-update-icon-cache -f -t "$hi" 2>/dev/null || true
+    ok "razer-reactive icon"
 }
 
 install_systemd_service() {
@@ -421,6 +441,7 @@ install_app_files
 install_config
 install_launchers
 install_desktop
+install_icons
 start_openrazer
 install_systemd_service
 verify_install

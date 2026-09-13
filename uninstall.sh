@@ -41,6 +41,11 @@ step "Usuwanie plików programu"
 rm -f "$BIN_DIR/razer-reactive" "$BIN_DIR/razer-reactive-gui"
 rm -rf "$INSTALL_DIR"
 rm -f "$USER_HOME/.local/share/applications/razer-reactive.desktop"
+hi="$USER_HOME/.local/share/icons/hicolor"
+for size in 32 48 64 128 256 512; do
+    rm -f "$hi/${size}x${size}/apps/razer-reactive.png"
+done
+as_user gtk-update-icon-cache -f -t "$hi" 2>/dev/null || true
 for desktop in "$USER_HOME/Pulpit/Razer Reactive.desktop" "$USER_HOME/Desktop/Razer Reactive.desktop"; do
     rm -f "$desktop"
 done
