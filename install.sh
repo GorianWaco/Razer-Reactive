@@ -315,12 +315,15 @@ install_systemd_service() {
 Description=Razer Reactive keyboard lighting
 After=graphical-session.target openrazer-daemon.service
 Wants=openrazer-daemon.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart=$exec_line
 Restart=on-failure
 RestartSec=3
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=default.target
@@ -334,9 +337,15 @@ EOF
         as_user XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus}" \
             systemctl --user daemon-reload
         as_user XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus}" \
-            systemctl --user enable --now razer-reactive.service \
-            || warn "could not start the service — run it after login"
-        ok "razer-reactive.service"
+            systemctl --user reset-failed razer-reactive.service 2>/dev/null || true
+        if as_user XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus}" \
+            systemctl --user enable --now razer-reactive.service; then
+            ok "razer-reactive.service"
+        else
+            warn "could not start the service — the GUI can start it after login"
+            as_user XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus}" \
+                journalctl --user -u razer-reactive.service -n 20 --no-pager || true
+        fi
     else
         warn "no graphical session — enable after login:"
         echo "      systemctl --user enable --now razer-reactive.service"
@@ -351,7 +360,7 @@ start_openrazer() {
     rt="$(user_runtime)"
     bus="${rt}/bus"
     if [ ! -f /usr/lib/systemd/user/openrazer-daemon.service ] \
-        && [ ! -f /usr/lib/systemd/user/openrazer-daemon.service ]; then
+        && [ ! -f "$USER_HOME/.config/systemd/user/openrazer-daemon.service" ]; then
         warn "openrazer-daemon.service not found — install OpenRazer for your distro"
         return 0
     fi

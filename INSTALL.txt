@@ -18,6 +18,9 @@ Quick install
   Then log out and back in (openrazer group), plug in the keyboard,
   and run: razer-reactive-gui
 
+  The GUI starts the user systemd service on its own. If the window
+  says the service is unavailable, click “Start service”.
+
 From a release tarball
 ----------------------
   tar -xzf razer-reactive-*.tar.gz

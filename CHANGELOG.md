@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8
+
+- Language, the active lighting profile, and the rest of the settings are saved automatically
+- After a reboot the daemon restores that saved look instead of the factory default
+- Loading a lighting profile keeps the interface language you already chose
+
+## 1.7
+
+- GUI starts the background lighting service itself (no `sudo ./install.sh` when the app is already installed)
+- “Start service” banner when the daemon is down; Start in the header also launches it
+- Clearer errors: missing OpenRazer, stopped daemon, journal excerpt
+- Daemon keeps running and retries the keyboard if OpenRazer is not ready yet
+- systemd unit: higher start limit, unbuffered logs, reset-failed on install
+
 ## 1.6
 
 - Factory lighting profiles shipped with the app: Startowy, Mryganie na przemian, Deszcz czerwony, Krople na klawisze

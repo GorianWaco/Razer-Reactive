@@ -8,7 +8,7 @@
 # archive (see comments below) and run: updpkgsums && makepkg --printsrcinfo > .SRCINFO
 
 pkgname=razer-reactive
-pkgver=1.6
+pkgver=1.7
 pkgrel=1
 pkgdesc="Reactive per-key lighting for Razer keyboards (OpenRazer)"
 arch=('any')
@@ -99,12 +99,15 @@ EOF
 Description=Razer Reactive keyboard lighting
 After=graphical-session.target openrazer-daemon.service
 Wants=openrazer-daemon.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /usr/share/razer-reactive/razer_reactive.py --daemon
 Restart=on-failure
 RestartSec=3
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=default.target

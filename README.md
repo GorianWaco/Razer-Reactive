@@ -41,6 +41,8 @@ Następnie **wyloguj się i zaloguj** (grupa `openrazer`), podłącz klawiaturę
 razer-reactive-gui
 ```
 
+Okno samo uruchamia usługę w tle (systemd --user). Jeśli zobaczysz „Usługa niedostępna”, kliknij **Uruchom usługę** — `sudo ./install.sh` jest potrzebne tylko przy pierwszej instalacji.
+
 Jeśli OpenRazer jest już zainstalowany:
 
 ```bash
@@ -120,7 +122,7 @@ cd Razer-Reactive
 sudo ./install.sh
 ```
 
-Log out and back in, then run `razer-reactive-gui`.
+Log out and back in, then run `razer-reactive-gui`. The window starts the user systemd service by itself; use **Start service** if the daemon is down.
 
 `install.sh` talks to **pacman**, **apt**, **dnf** or **zypper**. OpenRazer still has to be available for your distro — the script installs it when the packages exist, otherwise it prints the usual OpenRazer instructions.
 

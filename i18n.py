@@ -63,6 +63,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "app_title": "Razer Reactive",
         "save": "Save",
         "start": "Start",
+        "start_service": "Start service",
+        "starting_service": "Starting background service…",
+        "retry_service": "Retry",
         "stop": "Stop",
         "cancel": "Cancel",
         "apply": "Apply",
@@ -176,9 +179,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "delete_profile_heading": "Delete profile “{name}”?",
         "delete_profile_body": "This cannot be undone.",
         "daemon_offline": (
-            "Background service is not running. On a fresh system run:\n"
-            "sudo ./install.sh"
+            "Background service is not running. Click “Start service” — no sudo needed."
         ),
+        "daemon_start_fail": "Could not start the background service: {err}",
         "daemon_error": "Could not connect to service: {err}",
         "daemon_lost": "Lost connection to the background service.",
         "toast_update_error": "Update error.",
@@ -210,6 +213,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "app_title": "Razer Reactive",
         "save": "Zapisz",
         "start": "Uruchom",
+        "start_service": "Uruchom usługę",
+        "starting_service": "Uruchamianie usługi w tle…",
+        "retry_service": "Ponów",
         "stop": "Zatrzymaj",
         "cancel": "Anuluj",
         "apply": "Zastosuj",
@@ -323,9 +329,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "delete_profile_heading": "Usunąć profil „{name}”?",
         "delete_profile_body": "Tej operacji nie można cofnąć.",
         "daemon_offline": (
-            "Usługa w tle nie działa. Na świeżym systemie uruchom:\n"
-            "sudo ./install.sh"
+            "Usługa w tle nie działa. Kliknij „Uruchom usługę” — sudo nie jest potrzebne."
         ),
+        "daemon_start_fail": "Nie udało się uruchomić usługi w tle: {err}",
         "daemon_error": "Nie udało się połączyć z usługą: {err}",
         "daemon_lost": "Utracono połączenie z usługą w tle.",
         "toast_update_error": "Błąd aktualizacji.",

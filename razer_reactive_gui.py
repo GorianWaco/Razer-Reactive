@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import gi
@@ -42,6 +43,7 @@ from razer_reactive import (
     config_from_dict,
     default_config_path,
     delete_profile,
+    ensure_user_service_running,
     get_profile,
     is_factory_profile,
     is_keyd_running,
@@ -1020,6 +1022,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_default_size(1280, 920)
         self.config = config
         self._lang = normalize_ui_language(config.ui_language)
+        self._active_profile = config.active_profile
         self.client = DaemonClient()
         self._daemon_available = False
         self._daemon_synced = False
@@ -1031,6 +1034,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._custom_key_mode_handler_id: int | None = None
         self._language_handler_id: int | None = None
         self._status_state = "offline"
+        self._service_starting = False
 
         self.connect("realize", self._on_realize)
 
@@ -1051,6 +1055,12 @@ class MainWindow(Adw.ApplicationWindow):
         header.pack_start(self.save_button)
         header.pack_end(self.start_button)
         toolbar_view.add_top_bar(header)
+
+        self.daemon_banner = Adw.Banner()
+        self.daemon_banner.set_revealed(False)
+        self.daemon_banner.set_button_label(tr(self._lang, "start_service"))
+        self.daemon_banner.connect("button-clicked", self._on_start_service_clicked)
+        toolbar_view.add_top_bar(self.daemon_banner)
 
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1158,7 +1168,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.profile_actions_row.add_suffix(profile_btn_box)
         self.profiles_group.add(self.profile_actions_row)
         content.append(self.profiles_group)
-        self._refresh_profile_list()
+        self._refresh_profile_list(select_name=self._active_profile or None)
+        if self._active_profile:
+            self.profile_name_row.set_text(self._active_profile)
 
         # Background
         self.background_group = Adw.PreferencesGroup(
@@ -1396,7 +1408,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.connect("close-request", self._on_close_request)
         self._update_background_mode_visibility()
         self._update_press_mode_visibility()
-        self._connect_daemon()
+        self._connect_daemon(start_service=True)
+        self._start_status_polling()
         self._update_keyd_warning()
 
     def _t(self, key: str, **kwargs) -> str:
@@ -1508,6 +1521,10 @@ class MainWindow(Adw.ApplicationWindow):
         self.actions_group.set_description(tr(lang, "actions_desc"))
         self.turn_off_button.set_label(tr(lang, "turn_off"))
         self.reset_button.set_label(tr(lang, "reset_settings"))
+        if self._daemon_available:
+            self.daemon_banner.set_button_label(tr(lang, "retry_service"))
+        else:
+            self.daemon_banner.set_button_label(tr(lang, "start_service"))
 
         self._set_status_ui(self._status_state)
         self._update_keyd_warning()
@@ -1537,8 +1554,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._profile_model.splice(0, self._profile_model.get_n_items())
         for name in names:
             self._profile_model.append(name)
-        if select_name and select_name in names:
-            self.profile_combo_row.set_selected(names.index(select_name))
+        target = self._active_profile if select_name is None else select_name
+        if target and target in names:
+            self.profile_combo_row.set_selected(names.index(target))
         elif names:
             self.profile_combo_row.set_selected(0)
 
@@ -1548,8 +1566,10 @@ class MainWindow(Adw.ApplicationWindow):
             self._show_toast(self._t("toast_profile_name"))
             return
         try:
+            self._active_profile = name
             save_profile(name, self._current_config())
             self._refresh_profile_list(select_name=name)
+            self._schedule_apply()
             self._show_toast(self._t("toast_profile_saved", name=name))
         except Exception as exc:
             self._show_toast(self._t("toast_profile_save_fail", err=exc))
@@ -1566,6 +1586,13 @@ class MainWindow(Adw.ApplicationWindow):
             self._refresh_profile_list()
             return
 
+        self._active_profile = name
+        config = replace(
+            config,
+            ui_language=self._lang,
+            active_profile=name,
+            keyboard_name=self.config.keyboard_name,
+        )
         self._daemon_synced = False
         self.config = config
         self._load_config_into_ui(config)
@@ -1601,6 +1628,9 @@ class MainWindow(Adw.ApplicationWindow):
         if response != "delete":
             return
         result = delete_profile(name)
+        if self._active_profile == name:
+            self._active_profile = ""
+            self._schedule_apply()
         self._refresh_profile_list()
         if result == "deleted":
             self._show_toast(self._t("toast_profile_deleted", name=name))
@@ -1611,11 +1641,32 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self._show_toast(self._t("toast_profile_missing", name=name))
 
-    def _connect_daemon(self) -> None:
+    def _connect_daemon(self, start_service: bool = False) -> None:
+        if self._service_starting:
+            return
+        self._service_starting = True
+        self.start_button.set_sensitive(False)
+        already_up = self.client.is_available()
+        if already_up:
+            self.daemon_banner.set_revealed(False)
+        else:
+            self.daemon_banner.set_title(self._t("starting_service"))
+            self.daemon_banner.set_button_label("")
+            self.daemon_banner.set_revealed(True)
+        self._set_status_ui("connecting")
+
         def worker() -> None:
+            error = ""
             try:
+                if start_service and not self.client.is_available():
+                    result = ensure_user_service_running()
+                    if not result.get("ok"):
+                        error = result.get("error") or self._t("toast_daemon_down")
+                        GLib.idle_add(self._on_daemon_offline, error)
+                        return
+
                 if not self.client.is_available():
-                    GLib.idle_add(self._on_daemon_offline)
+                    GLib.idle_add(self._on_daemon_offline, "")
                     return
 
                 status = self.client.status()
@@ -1626,28 +1677,89 @@ class MainWindow(Adw.ApplicationWindow):
 
         threading.Thread(target=worker, name="connect-daemon", daemon=True).start()
 
-    def _on_daemon_offline(self) -> None:
+    def _on_start_service_clicked(self, *_args) -> None:
+        if self._daemon_available:
+            self._retry_lighting()
+            return
+        self._connect_daemon(start_service=True)
+
+    def _retry_lighting(self) -> None:
+        if self._service_starting or not self._daemon_available:
+            return
+        self._service_starting = True
+        self.start_button.set_sensitive(False)
+        config = self._current_config()
+
+        def worker() -> None:
+            try:
+                self.client.update_config(config)
+                response = self.client.start_lighting()
+                if not response.get("ok"):
+                    GLib.idle_add(
+                        self._show_toast,
+                        response.get("error", self._t("toast_op_failed")),
+                    )
+                    GLib.idle_add(self._finish_service_start)
+                    return
+                status = self.client.status()
+                GLib.idle_add(self._on_toggle_done, True, self._t("toast_started"))
+                GLib.idle_add(self._apply_status, status)
+            except Exception as exc:
+                GLib.idle_add(self._show_toast, self._t("toast_failed", err=exc))
+            finally:
+                GLib.idle_add(self._finish_service_start)
+
+        threading.Thread(target=worker, name="retry-lighting", daemon=True).start()
+
+    def _finish_service_start(self) -> None:
+        self._service_starting = False
+        self.start_button.set_sensitive(True)
+
+    def _banner_title(self, text: str) -> str:
+        first = text.strip().split("\n", 1)[0].strip()
+        if len(first) > 180:
+            return first[:177] + "…"
+        return first
+
+    def _on_daemon_offline(self, error: str = "") -> None:
+        self._service_starting = False
         self._daemon_available = False
         self._set_status_ui("offline")
         self.device_label.set_text("")
-        self.daemon_warning.set_text(self._t("daemon_offline"))
-        self.daemon_warning.set_visible(True)
+        message = error.strip() if error else self._t("daemon_offline")
+        self.daemon_warning.set_text(message)
+        self.daemon_warning.set_visible(bool(error))
+        if error:
+            self.daemon_banner.set_title(
+                self._banner_title(self._t("daemon_start_fail", err=error))
+            )
+        else:
+            self.daemon_banner.set_title(self._t("daemon_offline"))
+        self.daemon_banner.set_button_label(self._t("start_service"))
+        self.daemon_banner.set_revealed(True)
         self._set_actions_sensitive(False)
 
     def _on_daemon_error(self, message: str) -> None:
+        self._service_starting = False
         self._daemon_available = False
         self._set_status_ui("offline")
         self.device_label.set_text("")
         self.daemon_warning.set_text(self._t("daemon_error", err=message))
         self.daemon_warning.set_visible(True)
+        self.daemon_banner.set_title(
+            self._banner_title(self._t("daemon_error", err=message))
+        )
+        self.daemon_banner.set_button_label(self._t("retry_service"))
+        self.daemon_banner.set_revealed(True)
         self._set_actions_sensitive(False)
 
     def _set_actions_sensitive(self, enabled: bool) -> None:
-        self.start_button.set_sensitive(enabled)
+        self.start_button.set_sensitive(not self._service_starting)
         self.turn_off_button.set_sensitive(enabled)
         self.reset_button.set_sensitive(enabled)
 
     def _on_daemon_ready(self, status: dict, config: Config) -> None:
+        self._service_starting = False
         self._daemon_available = True
         self._daemon_synced = False
         self.config = config
@@ -1662,7 +1774,6 @@ class MainWindow(Adw.ApplicationWindow):
             self.device_label.set_text(keyboard)
         else:
             self.device_label.set_text(self._t("device_openrazer"))
-        self.daemon_warning.set_visible(False)
         self._set_actions_sensitive(True)
         self._start_status_polling()
 
@@ -1682,8 +1793,12 @@ class MainWindow(Adw.ApplicationWindow):
             self.language_row.handler_block(self._language_handler_id)
         try:
             self._lang = normalize_ui_language(config.ui_language)
+            self._active_profile = config.active_profile
             self.language_row.set_selected(0 if self._lang == "en" else 1)
             self._apply_language()
+            self._refresh_profile_list(select_name=self._active_profile or None)
+            if self._active_profile:
+                self.profile_name_row.set_text(self._active_profile)
 
             self.base_color_row.set_color(config.base_color)
             self.base_color_2_row.set_color(config.base_color_2)
@@ -1736,22 +1851,33 @@ class MainWindow(Adw.ApplicationWindow):
             return
 
         def poll() -> bool:
-            if not self._daemon_available:
-                return False
+            if self._service_starting:
+                return True
             try:
+                if not self._daemon_available:
+                    if self.client.is_available():
+                        status = self.client.status()
+                        config = self.client.get_config()
+                        self._on_daemon_ready(status, config)
+                    return True
                 status = self.client.status()
                 self._apply_status(status)
                 keyboard = status.get("keyboard", "")
                 source = status.get("input_source", "")
                 if keyboard and source:
                     self.device_label.set_text(f"{keyboard} · {source}")
+                elif keyboard:
+                    self.device_label.set_text(keyboard)
             except Exception:
-                self._daemon_available = False
-                self._set_status_ui("offline")
-                self.daemon_warning.set_text(self._t("daemon_lost"))
-                self.daemon_warning.set_visible(True)
-                self._set_actions_sensitive(False)
-                return False
+                if self._daemon_available:
+                    self._daemon_available = False
+                    self._set_status_ui("offline")
+                    self.daemon_warning.set_text(self._t("daemon_lost"))
+                    self.daemon_warning.set_visible(True)
+                    self.daemon_banner.set_title(self._t("daemon_lost"))
+                    self.daemon_banner.set_button_label(self._t("start_service"))
+                    self.daemon_banner.set_revealed(True)
+                    self._set_actions_sensitive(False)
             return True
 
         self._status_timer_id = GLib.timeout_add_seconds(2, poll)
@@ -1791,6 +1917,7 @@ class MainWindow(Adw.ApplicationWindow):
             custom_key_mode=self._selected_mode(self.custom_key_mode_row, CUSTOM_KEY_MODES),
             keyboard_layout=self.config.keyboard_layout,
             ui_language=self._lang,
+            active_profile=self._active_profile,
             key_colors=self.keyboard_editor.get_key_colors(),
             key_colors_2=self.keyboard_editor.get_key_colors_2(),
             key_effects=self.keyboard_editor.get_key_effects(),
@@ -1799,7 +1926,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
 
     def _schedule_apply(self) -> None:
-        if self._applying_config or not self._daemon_synced or not self._daemon_available:
+        if self._applying_config:
             return
 
         if self._apply_timeout_id is not None:
@@ -1807,16 +1934,30 @@ class MainWindow(Adw.ApplicationWindow):
 
         self._apply_timeout_id = GLib.timeout_add(400, self._apply_config_now)
 
+    def _persist_config(self) -> None:
+        """Write the current look and language so a reboot restores them."""
+        self.config = self._current_config()
+        save_config(self.config)
+
     def _apply_config_now(self) -> bool:
         self._apply_timeout_id = None
+        if self._applying_config:
+            return False
+
+        try:
+            self._persist_config()
+        except OSError as exc:
+            self._show_toast(self._t("toast_error", err=exc))
+            return False
+
         if not self._daemon_synced or not self._daemon_available:
             return False
 
-        self.config = self._current_config()
+        config = self.config
 
         def worker() -> None:
             try:
-                response = self.client.update_config(self.config)
+                response = self.client.update_config(config)
                 if not response.get("ok"):
                     GLib.idle_add(
                         self._show_toast,
@@ -1868,6 +2009,17 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self._set_status_ui("stopped")
 
+        error = str(status.get("error") or "").strip()
+        if error:
+            self.daemon_warning.set_text(error)
+            self.daemon_warning.set_visible(True)
+            self.daemon_banner.set_title(self._banner_title(error))
+            self.daemon_banner.set_button_label(self._t("retry_service"))
+            self.daemon_banner.set_revealed(True)
+        else:
+            self.daemon_warning.set_visible(False)
+            self.daemon_banner.set_revealed(False)
+
     def _set_status_ui(self, state: str) -> None:
         self._status_state = state
         self.status_label.remove_css_class("status-running")
@@ -1881,6 +2033,12 @@ class MainWindow(Adw.ApplicationWindow):
             self.start_button.set_label(self._t("stop"))
             self.start_button.remove_css_class("suggested-action")
             self.start_button.add_css_class("destructive-action")
+        elif state == "connecting":
+            self.status_label.set_text(self._t("status_connecting"))
+            self.status_label.add_css_class("status-stopped")
+            self.start_button.set_label(self._t("start"))
+            self.start_button.remove_css_class("destructive-action")
+            self.start_button.add_css_class("suggested-action")
         elif state == "off":
             self.status_label.set_text(self._t("status_off"))
             self.status_label.add_css_class("status-off")
@@ -1902,7 +2060,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_toggle_clicked(self, _button) -> None:
         if not self._daemon_available:
-            self._show_toast(self._t("toast_daemon_down"))
+            self._connect_daemon(start_service=True)
             return
 
         self.config = self._current_config()
@@ -2040,6 +2198,14 @@ class MainWindow(Adw.ApplicationWindow):
         self.maximize()
 
     def _on_close_request(self, _window) -> bool:
+        if self._apply_timeout_id is not None:
+            GLib.source_remove(self._apply_timeout_id)
+            self._apply_timeout_id = None
+        if not self._applying_config:
+            try:
+                self._persist_config()
+            except OSError:
+                pass
         self._show_toast(self._t("toast_still_running"))
         return False
 

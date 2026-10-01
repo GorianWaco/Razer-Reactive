@@ -25,7 +25,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from evdev import InputDevice, ecodes
-from openrazer.client import DeviceManager
 
 EVENT_FORMAT = "@llHHI"
 EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
@@ -457,6 +456,7 @@ class Config:
     key_effects: dict[str, str] = field(default_factory=dict)
     caps_lock_indicator: bool = True
     caps_lock_color: RGB = (255, 220, 40)
+    active_profile: str = ""
 
 
 UI_LANGUAGES = ("en", "pl")
@@ -535,6 +535,16 @@ def rgb_to_hex(color: RGB) -> str:
     return "#{:02x}{:02x}{:02x}".format(*color)
 
 
+def toml_basic_string(value: str) -> str:
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def config_dir() -> Path:
     return Path.home() / ".config" / "razer-reactive"
 
@@ -589,6 +599,7 @@ def load_config(path: Path | None = None) -> Config:
     if not isinstance(ui_section, dict):
         ui_section = {}
     ui_language = normalize_ui_language(ui_section.get("language", "en"))
+    active_profile = str(ui_section.get("active_profile", "")).strip()
 
     indicators = data.get("indicators", {})
     if not isinstance(indicators, dict):
@@ -617,6 +628,7 @@ def load_config(path: Path | None = None) -> Config:
         key_effects=parse_key_effects(data.get("key_effects", {})),
         caps_lock_indicator=caps_lock_indicator,
         caps_lock_color=parse_rgb(caps_lock_raw, (255, 220, 40)),
+        active_profile=active_profile,
     ))
 
 
@@ -654,7 +666,8 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         f'keyboard_layout = "{config.keyboard_layout}"',
         "",
         "[ui]",
-        f'language = "{config.ui_language}"',
+        f'language = "{toml_basic_string(config.ui_language)}"',
+        f'active_profile = "{toml_basic_string(config.active_profile)}"',
         "",
         "[indicators]",
         f"caps_lock = {str(config.caps_lock_indicator).lower()}",
@@ -747,6 +760,7 @@ def save_user_profiles(profiles: dict[str, dict]) -> Path:
 def config_to_profile(config: Config) -> dict:
     data = config_to_dict(config)
     data.pop("keyboard_name", None)
+    data.pop("active_profile", None)
     return data
 
 
@@ -1161,6 +1175,7 @@ def config_to_dict(config: Config) -> dict:
         "key_effects": dict(config.key_effects),
         "caps_lock_indicator": config.caps_lock_indicator,
         "caps_lock_color": list(config.caps_lock_color),
+        "active_profile": config.active_profile,
     }
 
 
@@ -1198,6 +1213,7 @@ def config_from_dict(data: dict) -> Config:
         key_effects=parse_key_effects(data.get("key_effects", {})),
         caps_lock_indicator=bool(data.get("caps_lock_indicator", True)),
         caps_lock_color=parse_rgb(data.get("caps_lock_color", [255, 220, 40]), (255, 220, 40)),
+        active_profile=str(data.get("active_profile", "")).strip(),
     ))
 
 
@@ -1223,7 +1239,7 @@ class DaemonClient:
 
     def request(self, command: str, **payload) -> dict:
         if not self.is_available():
-            raise RuntimeError("Usługa w tle nie działa. Uruchom: razer_reactive.py --daemon")
+            raise RuntimeError("Background lighting service is not running.")
 
         message = {"cmd": command, **payload}
         encoded = (json.dumps(message) + "\n").encode("utf-8")
@@ -1275,6 +1291,14 @@ class DaemonClient:
 
 
 def find_keyboard(config: Config):
+    try:
+        from openrazer.client import DeviceManager
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing python-openrazer. Install OpenRazer (openrazer-meta) "
+            "for your distro, then log out and back in."
+        ) from exc
+
     manager = DeviceManager()
     manager.sync_effects = False
 
@@ -2251,15 +2275,23 @@ class ReactiveDaemon:
         self.keyboard = None
         self._last_error = ""
         self._lighting_turned_off = False
+        self._want_lighting = False
 
     def run(self, auto_start: bool = True) -> int:
         self._running = True
         self._server.start()
+        self._want_lighting = auto_start
 
         if auto_start:
             result = self.start_lighting()
             if not result.get("ok"):
-                self._last_error = result.get("error", "Nieznany błąd")
+                self._last_error = result.get("error", "Unknown error")
+                print(f"Lighting not started yet: {self._last_error}", file=sys.stderr)
+
+        retry_thread = threading.Thread(
+            target=self._retry_loop, name="lighting-retry", daemon=True
+        )
+        retry_thread.start()
 
         def handle_signal(_signum, _frame) -> None:
             self.shutdown()
@@ -2272,13 +2304,28 @@ class ReactiveDaemon:
                 time.sleep(0.2)
         finally:
             self._cleanup()
-        return 0 if not self._last_error else 1
+        return 0
+
+    def _retry_loop(self) -> None:
+        """Retry OpenRazer / keyboard if they were not ready at startup."""
+        while self._running:
+            time.sleep(5.0)
+            if not self._running:
+                break
+            with self._lock:
+                want = self._want_lighting
+                running = self.lighting is not None and self.lighting.is_running
+            if want and not running:
+                result = self.start_lighting()
+                if result.get("ok"):
+                    print("Lighting started after retry.", file=sys.stderr)
 
     def shutdown(self) -> None:
         self._shutdown_requested = True
         self._running = False
 
     def _cleanup(self) -> None:
+        self._want_lighting = False
         self.stop_lighting()
         self._server.stop()
 
@@ -2304,6 +2351,7 @@ class ReactiveDaemon:
 
     def start_lighting(self) -> dict:
         with self._lock:
+            self._want_lighting = True
             try:
                 self._ensure_keyboard()
                 if self.lighting is None:
@@ -2325,6 +2373,7 @@ class ReactiveDaemon:
 
     def stop_lighting(self) -> dict:
         with self._lock:
+            self._want_lighting = False
             if self.lighting is not None and self.lighting.is_running:
                 self.lighting.stop()
             self._lighting_turned_off = False
@@ -2332,6 +2381,7 @@ class ReactiveDaemon:
 
     def turn_off_lighting(self) -> dict:
         with self._lock:
+            self._want_lighting = False
             try:
                 self._ensure_keyboard()
                 if self.lighting is None:
@@ -2371,10 +2421,21 @@ class ReactiveDaemon:
 
         return {"ok": True, "config": config_dict}
 
+    def _remember_profile(self, config: Config) -> Config:
+        """Keep the last loaded profile when an older client omits the name."""
+        if not config.active_profile and self.config.active_profile:
+            return replace(config, active_profile=self.config.active_profile)
+        return config
+
     def update_config(self, config: Config) -> dict:
         with self._lock:
             old_mode = self.config.background_mode
+            config = self._remember_profile(config)
             self.config = replace(config)
+            try:
+                save_config(self.config, self.config_path)
+            except OSError as exc:
+                return {"ok": False, "error": str(exc)}
             if self.lighting is not None and self.lighting.is_running:
                 self.lighting.update_config(
                     self.config,
@@ -2384,8 +2445,12 @@ class ReactiveDaemon:
 
     def set_config(self, config: Config) -> dict:
         with self._lock:
+            config = self._remember_profile(config)
             self.config = replace(config)
-            save_config(self.config, self.config_path)
+            try:
+                save_config(self.config, self.config_path)
+            except OSError as exc:
+                return {"ok": False, "error": str(exc)}
             if self.lighting is not None and self.lighting.is_running:
                 self.lighting.update_config(self.config, reset_state=True)
             return {"ok": True}
@@ -2402,34 +2467,202 @@ def systemd_user_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / "razer-reactive.service"
 
 
-def install_systemd_service() -> Path:
-    unit_path = systemd_user_unit_path()
-    unit_path.parent.mkdir(parents=True, exist_ok=True)
+def installed_daemon_script() -> Path:
+    """Prefer the installed copy so the GUI can start the packaged daemon."""
+    candidates = (
+        Path.home() / ".local" / "share" / "razer-reactive" / "razer_reactive.py",
+        Path("/usr/share/razer-reactive/razer_reactive.py"),
+        SCRIPT_PATH,
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return SCRIPT_PATH
 
-    unit = f"""[Unit]
+
+def user_service_exec_start(script: Path | None = None) -> str:
+    script = script or installed_daemon_script()
+    starter = script.with_name("exec-with-keyd.sh")
+    python = "/usr/bin/python3"
+    if starter.is_file() and os.access(starter, os.X_OK):
+        return f"{starter} {python} {script} --daemon"
+    return f"{python} {script} --daemon"
+
+
+def user_service_unit_text(script: Path | None = None) -> str:
+    return f"""[Unit]
 Description=Razer Reactive keyboard lighting
 After=graphical-session.target openrazer-daemon.service
 Wants=openrazer-daemon.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 {SCRIPT_PATH} --daemon
+ExecStart={user_service_exec_start(script)}
 Restart=on-failure
 RestartSec=3
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=default.target
 """
-    unit_path.write_text(unit, encoding="utf-8")
 
-    subprocess.run(
-        ["systemctl", "--user", "daemon-reload"],
-        check=True,
+
+def _systemctl_user(*args: str, timeout: float = 8.0) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["systemctl", "--user", *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
     )
-    subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "razer-reactive.service"],
-        check=True,
-    )
+
+
+def daemon_is_alive(timeout: float = 1.0) -> bool:
+    try:
+        DaemonClient(timeout=timeout).status()
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_daemon(timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if daemon_is_alive(timeout=0.6):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def service_journal_tail(lines: int = 16) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "journalctl",
+                "--user",
+                "-u",
+                "razer-reactive.service",
+                "-n",
+                str(lines),
+                "--no-pager",
+                "-o",
+                "cat",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    text = (result.stdout or "").strip()
+    if len(text) > 1500:
+        text = text[-1500:]
+    return text
+
+
+def diagnose_service_failure() -> str:
+    parts: list[str] = []
+
+    try:
+        from openrazer.client import DeviceManager
+
+        try:
+            manager = DeviceManager()
+            keyboards = [
+                device.name
+                for device in manager.devices
+                if getattr(device, "type", "") == "keyboard"
+            ]
+            if not keyboards:
+                parts.append(
+                    "OpenRazer is running, but no Razer keyboard was found. "
+                    "Plug the keyboard in over USB."
+                )
+        except Exception as exc:
+            parts.append(f"OpenRazer is installed, but talking to the daemon failed: {exc}")
+    except ImportError:
+        parts.append(
+            "python-openrazer is not installed. Install OpenRazer for your distro "
+            "(openrazer-meta), then log out and back in."
+        )
+
+    daemon = _systemctl_user("is-active", "openrazer-daemon.service")
+    if daemon.stdout.strip() != "active":
+        parts.append(
+            "openrazer-daemon is not running. "
+            "Try: systemctl --user enable --now openrazer-daemon"
+        )
+
+    unit = _systemctl_user("is-failed", "razer-reactive.service")
+    if unit.stdout.strip() == "failed":
+        parts.append("The lighting service entered a failed state.")
+
+    journal = service_journal_tail()
+    if journal:
+        parts.append(journal)
+
+    return "\n".join(parts).strip()
+
+
+def write_user_service_unit() -> Path:
+    unit_path = systemd_user_unit_path()
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text(user_service_unit_text(), encoding="utf-8")
+    return unit_path
+
+
+def ensure_user_config() -> Path:
+    path = config_dir() / "config.toml"
+    if not path.exists():
+        save_config(default_config(), path)
+    return path
+
+
+def ensure_user_service_running(timeout: float = 12.0) -> dict:
+    """Start the user systemd unit if the daemon socket is down. No root needed."""
+    if daemon_is_alive():
+        return {"ok": True, "started": False, "error": ""}
+
+    ensure_user_config()
+
+    try:
+        write_user_service_unit()
+        _systemctl_user("daemon-reload")
+        _systemctl_user("reset-failed", "razer-reactive.service")
+        enable = _systemctl_user(
+            "enable", "--now", "razer-reactive.service", timeout=15.0
+        )
+        if enable.returncode != 0:
+            start = _systemctl_user("start", "razer-reactive.service", timeout=15.0)
+            if start.returncode != 0 and not wait_for_daemon(timeout=2.0):
+                detail = (start.stderr or start.stdout or enable.stderr or "").strip()
+                diagnosis = diagnose_service_failure()
+                error = detail or diagnosis or "Could not start razer-reactive.service"
+                if diagnosis and diagnosis not in error:
+                    error = f"{error}\n{diagnosis}"
+                return {"ok": False, "started": False, "error": error}
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "started": False, "error": str(exc)}
+
+    if wait_for_daemon(timeout=timeout):
+        return {"ok": True, "started": True, "error": ""}
+
+    diagnosis = diagnose_service_failure()
+    return {
+        "ok": False,
+        "started": False,
+        "error": diagnosis or "Background service did not become ready.",
+    }
+
+
+def install_systemd_service() -> Path:
+    unit_path = write_user_service_unit()
+    result = ensure_user_service_running()
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "Could not start razer-reactive.service")
     return unit_path
 
 
@@ -2492,7 +2725,7 @@ def main() -> int:
             print(f"Zainstalowano usługę: {path}")
             print("Usługa uruchomiona i włączona przy logowaniu.")
             return 0
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, RuntimeError, OSError) as exc:
             print(f"Błąd instalacji usługi: {exc}", file=sys.stderr)
             return 1
 
@@ -2503,7 +2736,7 @@ def main() -> int:
         return run_gui()
 
     if args.daemon:
-        config_path = args.config or default_config_path()
+        config_path = args.config or ensure_user_config()
         if not config_path.exists():
             print(f"Brak pliku konfiguracyjnego: {config_path}", file=sys.stderr)
             return 1
